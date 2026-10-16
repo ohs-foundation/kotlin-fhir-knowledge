@@ -16,15 +16,18 @@
 package dev.ohs.fhir.knowledge
 
 import dev.ohs.fhir.knowledge.db.inMemoryKnowledgeDatabase
+import dev.ohs.fhir.knowledge.npm.NpmPackageDownloader
 import dev.ohs.fhir.model.r4.Library
 import dev.ohs.fhir.model.r4.PlanDefinition
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import okio.ForwardingFileSystem
+import okio.IOException
 import okio.Path
 import okio.Path.Companion.toPath
 import okio.fakefilesystem.FakeFileSystem
@@ -90,6 +93,39 @@ class KnowledgeManagerTest {
   }
 
   @Test
+  fun shouldImportADirectoryThatDidNotExistAtTheFirstImport() = runTest {
+    val lateFolder = "/anc-cds-late".toPath()
+
+    val first = knowledgeManager.import(fhirNpmPackage, lateFolder)
+    writeResource(lateFolder / "Library-WHOCommon.json", library("WHOCommon", WHO_COMMON_URL))
+    val second = knowledgeManager.import(fhirNpmPackage, lateFolder)
+
+    assertEquals(ImportResult(indexed = 0, skipped = 0, failed = emptyList()), first)
+    assertEquals(ImportResult(indexed = 1, skipped = 0, failed = emptyList()), second)
+  }
+
+  @Test
+  fun shouldImportAgainAfterAnImportThatRaised() = runTest {
+    var listingFails = true
+    val failingOnceFileSystem =
+      object : ForwardingFileSystem(fileSystem) {
+        override fun listOrNull(dir: Path): List<Path>? {
+          if (listingFails) throw IOException("Unable to list $dir")
+          return super.listOrNull(dir)
+        }
+      }
+    val knowledgeManager =
+      knowledgeManager(failingOnceFileSystem, knowledgeDb) { _, _ -> error("no download expected") }
+
+    assertFailsWith<IOException> { knowledgeManager.import(fhirNpmPackage, dataFolder) }
+    assertTrue(knowledgeDb.knowledgeDao().getImplementationGuides().isEmpty())
+    listingFails = false
+    val result = knowledgeManager.import(fhirNpmPackage, dataFolder)
+
+    assertEquals(ImportResult(indexed = 6, skipped = 1, failed = emptyList()), result)
+  }
+
+  @Test
   fun shouldReportWhatAnImportIndexedSkippedAndFailed() = runTest {
     val broken = dataFolder / "Library-Broken.json"
     writeResource(broken, metadataResource("Library", "Broken", "$ANC_CDS/Library/Broken", VERSION))
@@ -105,13 +141,36 @@ class KnowledgeManagerTest {
   }
 
   @Test
-  fun shouldDeleteTheFilesAndEntriesOfAnImplementationGuide() = runTest {
+  fun shouldDeleteTheEntriesOfAnImportedImplementationGuideAndKeepItsFiles() = runTest {
     knowledgeManager.import(fhirNpmPackage, dataFolder)
 
     knowledgeManager.delete(fhirNpmPackage)
 
     assertTrue(knowledgeDb.knowledgeDao().getImplementationGuides().isEmpty())
-    assertFalse(fileSystem.exists(dataFolder))
+    assertTrue(knowledgeDb.knowledgeDao().getResources().isEmpty())
+    assertTrue(fileSystem.exists(dataFolder / "Library-WHOCommon.json"))
+  }
+
+  @Test
+  fun shouldReturnNothingForAnArtifactOfADeletedImplementationGuide() = runTest {
+    knowledgeManager.import(fhirNpmPackage, dataFolder)
+
+    knowledgeManager.delete(fhirNpmPackage)
+
+    assertEquals(0, knowledgeManager.loadResources(WHO_COMMON_URL, VERSION).count())
+    assertEquals(0, knowledgeManager.loadResources(WHO_COMMON_URL).count())
+  }
+
+  @Test
+  fun shouldKeepAnIndexedArtifactWhenAnImplementationGuideIsDeleted() = runTest {
+    val file = "/Library-defaultA.json".toPath()
+    writeResource(file, library("defaultA", LIBRARY_A_URL))
+    knowledgeManager.index(file)
+    knowledgeManager.import(fhirNpmPackage, dataFolder)
+
+    knowledgeManager.delete(fhirNpmPackage)
+
+    assertEquals(1, knowledgeManager.loadResources(LIBRARY_A_URL).count())
   }
 
   @Test
@@ -148,6 +207,34 @@ class KnowledgeManagerTest {
     assertFailsWith<IllegalArgumentException> {
       knowledgeManager.loadResources("$WHO_COMMON_URL|$VERSION|extra")
     }
+  }
+
+  @Test
+  fun shouldCloseTheDatabase() = runTest {
+    knowledgeManager.import(fhirNpmPackage, dataFolder)
+
+    knowledgeManager.close()
+
+    assertFails { knowledgeManager.loadResources(WHO_COMMON_URL) }
+  }
+
+  @Test
+  fun shouldCloseADownloaderThatCanBeClosed() {
+    val downloader =
+      object : NpmPackageDownloader, AutoCloseable {
+        var closed = false
+
+        override suspend fun downloadPackage(fhirNpmPackage: FhirNpmPackage, packageFolder: Path) =
+          error("no download expected")
+
+        override fun close() {
+          closed = true
+        }
+      }
+
+    knowledgeManager(fileSystem, knowledgeDb, downloader).close()
+
+    assertTrue(downloader.closed)
   }
 
   @Test

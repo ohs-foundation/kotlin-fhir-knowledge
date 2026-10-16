@@ -43,6 +43,9 @@ import okio.Path
  * do not share a set of knowledge artifacts. On desktop, this holds only for applications that pass
  * their application id to [create].
  *
+ * [close] the knowledge manager when the application is done with it. That closes the database and
+ * the HTTP client packages are downloaded with.
+ *
  * See [Clinical Reasoning](https://hl7.org/fhir/R4/clinicalreasoning-module.html) for the formal
  * definition of a knowledge artifact. This implementation treats the FHIR R4 metadata resources as
  * the knowledge artifacts, which is a slightly different set from the resources implementing the
@@ -50,11 +53,11 @@ import okio.Path
  */
 class KnowledgeManager
 internal constructor(
-  knowledgeDatabase: KnowledgeDatabase,
+  private val knowledgeDatabase: KnowledgeDatabase,
   private val fileSystem: FileSystem,
   private val npmFileManager: NpmFileManager,
   private val npmPackageDownloader: NpmPackageDownloader,
-) {
+) : AutoCloseable {
   private val knowledgeDao = knowledgeDatabase.knowledgeDao()
   private val json = Json { ignoreUnknownKeys = true }
 
@@ -63,7 +66,8 @@ internal constructor(
    * transitive dependencies. The packages are unpacked into a directory the knowledge manager owns,
    * and the resources they hold are indexed in the database for later retrieval.
    *
-   * FHIR NPM packages already present in the database are skipped.
+   * FHIR NPM packages already present in the database are skipped. A package whose download raises
+   * an [IOException] is logged and not installed.
    */
   suspend fun install(vararg fhirNpmPackages: FhirNpmPackage) {
     fhirNpmPackages
@@ -76,13 +80,16 @@ internal constructor(
               npmFileManager.getPackageDir(it.name, it.version),
             )
           }
-        } catch (e: Exception) {
+        } catch (e: IOException) {
           Logger.w(e) { "Unable to download package ${it.name} ${it.version}" }
         }
         try {
           val localFhirNpmPackageMetadata =
             npmFileManager.getLocalFhirNpmPackageMetadata(it.name, it.version)
-          import(it, localFhirNpmPackageMetadata.rootDirectory)
+          import(
+            it.copy(canonical = localFhirNpmPackageMetadata.canonical ?: it.canonical),
+            localFhirNpmPackageMetadata.rootDirectory,
+          )
           install(*localFhirNpmPackageMetadata.dependencies.toTypedArray())
         } catch (e: Exception) {
           Logger.w(e) { "Unable to install package ${it.name} ${it.version}" }
@@ -96,28 +103,22 @@ internal constructor(
    *
    * FHIR NPM packages already present in the database are skipped.
    *
+   * The package is recorded in the database together with its resources, after the files have been
+   * read. An import that raises records nothing, and so does one whose [rootDirectory] does not
+   * exist, so either can be run again.
+   *
    * @return what the import indexed, skipped and failed to read. A package already present in the
-   *   database returns an empty result.
+   *   database returns an empty result, and so does a [rootDirectory] that does not exist.
    */
   suspend fun import(fhirNpmPackage: FhirNpmPackage, rootDirectory: Path): ImportResult {
     if (knowledgeDao.getImplementationGuide(fhirNpmPackage.name, fhirNpmPackage.version) != null) {
       return ImportResult(indexed = 0, skipped = 0, failed = emptyList())
     }
     // TODO: copy the files into storage the knowledge manager owns?
-    val implementationGuideId =
-      knowledgeDao.insert(
-        ImplementationGuideEntity(
-          0L,
-          fhirNpmPackage.canonical ?: "",
-          fhirNpmPackage.name,
-          fhirNpmPackage.version,
-          rootDirectory,
-        )
-      )
     val files =
       withContext(ioDispatcher) { fileSystem.listOrNull(rootDirectory) }
         ?: return ImportResult(indexed = 0, skipped = 0, failed = emptyList())
-    var indexed = 0
+    val resources = mutableListOf<ResourceMetadataEntity>()
     var skipped = 0
     val failed = mutableListOf<Path>()
     files.sorted().forEach { file ->
@@ -134,8 +135,7 @@ internal constructor(
         skipped++
         return@forEach
       }
-      knowledgeDao.insertResource(
-        implementationGuideId,
+      resources +=
         ResourceMetadataEntity(
           0,
           resource.resourceType,
@@ -143,11 +143,19 @@ internal constructor(
           resource.name,
           resource.version,
           file,
-        ),
-      )
-      indexed++
+        )
     }
-    return ImportResult(indexed, skipped, failed)
+    knowledgeDao.insertImplementationGuide(
+      ImplementationGuideEntity(
+        0L,
+        fhirNpmPackage.canonical ?: "",
+        fhirNpmPackage.name,
+        fhirNpmPackage.version,
+        rootDirectory,
+      ),
+      resources,
+    )
+    return ImportResult(resources.size, skipped, failed)
   }
 
   /**
@@ -260,22 +268,35 @@ internal constructor(
     return Pair(parts[0], parts[1])
   }
 
-  /** Deletes the given implementation guides, cleaning up their files. */
+  /**
+   * Deletes the given implementation guides.
+   *
+   * The files of an implementation guide are deleted only when they are in the package cache. A
+   * directory passed to [import] is left as it is.
+   */
   suspend fun delete(vararg igDependencies: FhirNpmPackage) {
     igDependencies.forEach { igDependency ->
       val igEntity = knowledgeDao.getImplementationGuide(igDependency.name, igDependency.version)
       if (igEntity != null) {
-        knowledgeDao.deleteImplementationGuide(igEntity)
-        withContext(ioDispatcher) {
-          try {
-            fileSystem.deleteRecursively(igEntity.rootDirectory, mustExist = false)
-          } catch (e: IOException) {
-            // A directory that will not delete must not cost the remaining guides their turn.
-            Logger.w(e) { "Unable to delete ${igEntity.rootDirectory}" }
+        knowledgeDao.deleteImplementationGuide(igDependency.name, igDependency.version)
+        if (npmFileManager.containsPath(igEntity.rootDirectory)) {
+          withContext(ioDispatcher) {
+            try {
+              fileSystem.deleteRecursively(igEntity.rootDirectory, mustExist = false)
+            } catch (e: IOException) {
+              // A directory that will not delete must not cost the remaining guides their turn.
+              Logger.w(e) { "Unable to delete ${igEntity.rootDirectory}" }
+            }
           }
         }
       }
     }
+  }
+
+  /** Closes the database and the NPM package downloader. */
+  override fun close() {
+    (npmPackageDownloader as? AutoCloseable)?.close()
+    knowledgeDatabase.close()
   }
 
   /**

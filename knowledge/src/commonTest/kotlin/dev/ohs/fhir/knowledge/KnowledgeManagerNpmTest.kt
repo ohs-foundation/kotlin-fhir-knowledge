@@ -19,8 +19,11 @@ import dev.ohs.fhir.knowledge.db.inMemoryKnowledgeDatabase
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import okio.IOException
 import okio.Path
 import okio.Path.Companion.toPath
 import okio.fakefilesystem.FakeFileSystem
@@ -77,6 +80,59 @@ class KnowledgeManagerNpmTest {
     assertTrue(downloadedPackages.isEmpty())
   }
 
+  @Test
+  fun shouldNotInstallAPackageWhoseDownloadRaisesAnIOException() = runTest {
+    val knowledgeManager =
+      knowledgeManager(fileSystem, knowledgeDb) { _, _ -> throw IOException("Unexpected code 404") }
+
+    knowledgeManager.install(PACKAGE_3)
+
+    assertTrue(knowledgeDb.knowledgeDao().getImplementationGuides().isEmpty())
+  }
+
+  @Test
+  fun shouldRaiseWhatADownloadRaisesOtherThanAnIOException() = runTest {
+    val knowledgeManager =
+      knowledgeManager(fileSystem, knowledgeDb) { _, _ -> throw UnsupportedOperationException() }
+
+    assertFailsWith<UnsupportedOperationException> { knowledgeManager.install(PACKAGE_3) }
+  }
+
+  @Test
+  fun shouldRecordTheCanonicalUrlOfThePackageManifest() = runTest {
+    val packageWithCanonical = PACKAGE_3.copy(canonical = CANONICAL)
+    cachePackage(packageWithCanonical, packageFolder(packageWithCanonical))
+
+    knowledgeManager.install(PACKAGE_3)
+
+    assertEquals(CANONICAL, implementationGuideUrl(PACKAGE_3))
+  }
+
+  @Test
+  fun shouldRecordTheCanonicalUrlOfTheCallerWhenThePackageManifestHasNone() = runTest {
+    cachePackage(PACKAGE_3, packageFolder(PACKAGE_3))
+
+    knowledgeManager.install(PACKAGE_3.copy(canonical = CANONICAL))
+
+    assertEquals(CANONICAL, implementationGuideUrl(PACKAGE_3))
+  }
+
+  @Test
+  fun shouldDeleteTheFilesOfAnInstalledPackage() = runTest {
+    knowledgeManager.install(PACKAGE_3)
+
+    knowledgeManager.delete(PACKAGE_3)
+
+    assertTrue(knowledgeDb.knowledgeDao().getImplementationGuides().isEmpty())
+    assertFalse(fileSystem.exists(packageFolder(PACKAGE_3) / "package"))
+  }
+
+  private suspend fun implementationGuideUrl(fhirNpmPackage: FhirNpmPackage) =
+    knowledgeDb
+      .knowledgeDao()
+      .getImplementationGuide(fhirNpmPackage.name, fhirNpmPackage.version)
+      ?.url
+
   private fun packageFolder(fhirNpmPackage: FhirNpmPackage) =
     NPM_ROOT / "${fhirNpmPackage.name}#${fhirNpmPackage.version}"
 
@@ -90,7 +146,8 @@ class KnowledgeManagerNpmTest {
     val dependency = DEPENDENCIES[fhirNpmPackage]
     val dependencies =
       dependency?.let { ""","dependencies":{"${it.name}":"${it.version}"}""" } ?: ""
-    return """{"name":"${fhirNpmPackage.name}","version":"${fhirNpmPackage.version}"$dependencies}"""
+    val canonical = fhirNpmPackage.canonical?.let { ""","canonical":"$it"""" } ?: ""
+    return """{"name":"${fhirNpmPackage.name}","version":"${fhirNpmPackage.version}"$canonical$dependencies}"""
   }
 
   private companion object {
@@ -98,6 +155,7 @@ class KnowledgeManagerNpmTest {
     val PACKAGE_1 = FhirNpmPackage("package1", "version")
     val PACKAGE_2 = FhirNpmPackage("package2", "version")
     val PACKAGE_3 = FhirNpmPackage("package3", "version")
+    const val CANONICAL = "http://example.org/fhir/package3"
     val DEPENDENCIES = mapOf(PACKAGE_1 to PACKAGE_2, PACKAGE_2 to PACKAGE_3)
   }
 }

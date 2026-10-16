@@ -79,6 +79,19 @@ class NpmFileManagerTest {
     assertFalse(npmFileManager.containsPackage(PACKAGE_ID, MISSING_VERSION))
   }
 
+  @Test
+  fun shouldReportAPathInsideTheCacheAsContained() {
+    assertTrue(npmFileManager.containsPath(cacheRoot / "$PACKAGE_ID#$VERSION" / "package"))
+  }
+
+  @Test
+  fun shouldReportAPathOutsideTheCacheAsNotContained() {
+    assertFalse(npmFileManager.containsPath("/assets/$PACKAGE_ID".toPath()))
+    assertFalse(npmFileManager.containsPath(cacheRoot / ".." / "assets"))
+    assertFalse(npmFileManager.containsPath("/cache-of-the-application".toPath()))
+    assertFalse(npmFileManager.containsPath(cacheRoot))
+  }
+
   private fun writeManifest(version: String) {
     val packageDir = cacheRoot / "$PACKAGE_ID#$version" / "package"
     fileSystem.createDirectories(packageDir)

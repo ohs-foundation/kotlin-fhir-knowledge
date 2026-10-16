@@ -118,9 +118,10 @@ dependencies {
 
 ### Installing and resolving knowledge artifacts
 
-Create a `KnowledgeManager` once at startup. On Android pass the application `Context`; on desktop
-pass the application id, which keeps the database and package cache under
-`~/.fhir-knowledge/<application id>`; on iOS and the web pass `Unit` (the default).
+Create a `KnowledgeManager` once at startup, and `close()` it when the application is done with it.
+On Android pass the application `Context`; on desktop pass the application id, which keeps the
+database and package cache under `~/.fhir-knowledge/<application id>`; on iOS and the web pass
+`Unit` (the default).
 
 ```kotlin
 val knowledgeManager = KnowledgeManager.create(platformContext) // Android: applicationContext; desktop: the application id
@@ -136,7 +137,8 @@ val library =
 ```
 
 `import` indexes a package that is already unpacked, and `index` records a single artifact held in
-an immutable file, such as one bundled with the application.
+an immutable file, such as one bundled with the application. `delete` removes the files of a package
+that `install` downloaded; a directory passed to `import` is left as it is.
 
 A file is indexed when its `resourceType` is one of the 29 FHIR R4 metadata resources —
 `ActivityDefinition`, `Library`, `Measure`, `PlanDefinition`, `Questionnaire`, `StructureDefinition`,

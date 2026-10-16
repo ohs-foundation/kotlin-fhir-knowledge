@@ -49,6 +49,17 @@ internal abstract class KnowledgeDao {
     return resourceMetadataId
   }
 
+  /** Inserts the [implementationGuide] and its [resources] together, or none of them. */
+  @Transaction
+  open suspend fun insertImplementationGuide(
+    implementationGuide: ImplementationGuideEntity,
+    resources: List<ResourceMetadataEntity>,
+  ): Long {
+    val implementationGuideId = insert(implementationGuide)
+    resources.forEach { insertResource(implementationGuideId, it) }
+    return implementationGuideId
+  }
+
   @Transaction
   open suspend fun deleteImplementationGuide(name: String, version: String) {
     val igEntity = getImplementationGuide(name, version)

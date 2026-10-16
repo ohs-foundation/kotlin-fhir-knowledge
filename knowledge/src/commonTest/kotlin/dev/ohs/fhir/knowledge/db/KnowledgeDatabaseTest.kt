@@ -21,6 +21,7 @@ import dev.ohs.fhir.model.r4.terminologies.ResourceType
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
@@ -64,6 +65,28 @@ internal class KnowledgeDatabaseTest {
     assertEquals(emptyList(), knowledgeDao.getImplementationGuides())
     assertEquals(emptyList(), knowledgeDao.getResources())
     assertNull(knowledgeDao.getImplementationGuidesWithResources(igId))
+  }
+
+  @Test
+  fun shouldInsertAnImplementationGuideTogetherWithItsResources() = runTest {
+    val igId = knowledgeDao.insertImplementationGuide(IG_ENTITY, listOf(resourceEntity()))
+
+    assertEquals(listOf(RES_URL), resourceUrlsOf(igId))
+  }
+
+  /**
+   * The second resource shares the url, version and file of the first under another type, which the
+   * unique index of the resource table rejects.
+   */
+  @Test
+  fun shouldInsertNothingWhenOneResourceOfAnImplementationGuideCannotBeInserted() = runTest {
+    val resources =
+      listOf(resourceEntity(), resourceEntity().copy(resourceType = ResourceType.Library))
+
+    assertFails { knowledgeDao.insertImplementationGuide(IG_ENTITY, resources) }
+
+    assertEquals(emptyList(), knowledgeDao.getImplementationGuides())
+    assertEquals(emptyList(), knowledgeDao.getResources())
   }
 
   /** One resource can belong to several guides, so the row is shared rather than duplicated. */

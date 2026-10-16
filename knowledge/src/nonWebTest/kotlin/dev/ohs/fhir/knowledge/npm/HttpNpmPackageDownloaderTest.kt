@@ -28,7 +28,9 @@ import io.ktor.http.HttpStatusCode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.test.runTest
 import okio.ByteString.Companion.encodeUtf8
 import okio.IOException
@@ -95,6 +97,18 @@ class HttpNpmPackageDownloaderTest {
   }
 
   @Test
+  fun shouldRaiseAnIOExceptionWhenTheRequestFails() = runTest {
+    val downloader = downloader(MockEngine { throw kotlinx.io.IOException("Connection refused") })
+
+    assertFailsWith<IOException> {
+      downloader.downloadPackage(
+        FhirNpmPackage(PACKAGE_ID, VERSION),
+        npmFileManager.getPackageDir(PACKAGE_ID, VERSION),
+      )
+    }
+  }
+
+  @Test
   fun shouldRejectAnEntryThatEscapesThePackageDirectory() = runTest {
     val downloader = downloader(MockEngine { respond(PATH_TRAVERSAL_TGZ) })
     val packageDir = npmFileManager.getPackageDir(PACKAGE_ID, VERSION)
@@ -104,6 +118,15 @@ class HttpNpmPackageDownloaderTest {
     }
 
     assertTrue(fileSystem.list(CACHE_ROOT).none { it.name == "escaped.json" })
+  }
+
+  @Test
+  fun shouldCloseTheHttpClient() {
+    val client = HttpClient(MockEngine { respond(NPM_PACKAGE_TGZ) })
+
+    HttpNpmPackageDownloader(PACKAGE_SERVER, fileSystem, client).close()
+
+    assertFalse(client.isActive)
   }
 
   private fun downloader(engine: MockEngine) =

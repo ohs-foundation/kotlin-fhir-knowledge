@@ -32,6 +32,15 @@ internal class NpmFileManager(private val fileSystem: FileSystem, private val ca
   /** Returns the package directory for the given [packageId] and [version]. */
   fun getPackageDir(packageId: String, version: String) = cacheRoot / "$packageId#$version"
 
+  /** Returns whether the given [path] is inside the package cache. */
+  fun containsPath(path: Path): Boolean {
+    val cache = cacheRoot.normalized()
+    val normalized = path.normalized()
+    return normalized.root == cache.root &&
+      normalized.segments.size > cache.segments.size &&
+      normalized.segments.take(cache.segments.size) == cache.segments
+  }
+
   /** Returns whether the package for the given [packageId] and [version] is cached. */
   suspend fun containsPackage(packageId: String, version: String): Boolean =
     withContext(ioDispatcher) { fileSystem.exists(manifestPath(packageId, version)) }
