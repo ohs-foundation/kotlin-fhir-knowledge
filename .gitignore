@@ -1,0 +1,6 @@
+SCOPING.md
+local.properties
+build/
+.gradle/
+.idea/
+.kotlin/
