@@ -15,6 +15,7 @@
  */
 package dev.ohs.fhir.knowledge.db
 
+import dev.ohs.fhir.knowledge.canCloseDatabase
 import dev.ohs.fhir.knowledge.db.entities.ImplementationGuideEntity
 import dev.ohs.fhir.knowledge.db.entities.ResourceMetadataEntity
 import dev.ohs.fhir.model.r4.terminologies.ResourceType
@@ -33,7 +34,7 @@ internal class KnowledgeDatabaseTest {
 
   @AfterTest
   fun closeDb() {
-    knowledgeDb.close()
+    if (canCloseDatabase()) knowledgeDb.close()
   }
 
   @Test

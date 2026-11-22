@@ -45,6 +45,13 @@ internal actual fun knowledgeDatabaseBuilder(
     .setDriver(sqliteWasmDriver())
 
 /**
+ * Room's `close()` waits in a loop for the refresh of its invalidation tracker, which Room starts
+ * after every write. The refresh needs the page's only thread to finish, so a close right after a
+ * write stops the page responding. The database is left open instead, as in kotlin-fhir-engine.
+ */
+internal actual fun canCloseDatabase(): Boolean = false
+
+/**
  * The browser has no directory tree, so this names a root within whichever [FileSystem] the caller
  * supplies to [KnowledgeManager.create].
  */
