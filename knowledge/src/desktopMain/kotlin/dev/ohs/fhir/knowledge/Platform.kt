@@ -41,6 +41,8 @@ internal actual fun knowledgeDatabaseBuilder(
     .setDriver(BundledSQLiteDriver())
     .setQueryCoroutineContext(ioDispatcher)
 
+internal actual fun canCloseDatabase(): Boolean = true
+
 internal actual fun defaultNpmDirectory(platformContext: Any): Path =
   storageDirectory(platformContext)
 

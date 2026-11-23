@@ -47,6 +47,9 @@ internal expect fun knowledgeDatabaseBuilder(
   inMemory: Boolean,
 ): RoomDatabase.Builder<KnowledgeDatabase>
 
+/** Returns whether the metadata database can be closed on this platform. */
+internal expect fun canCloseDatabase(): Boolean
+
 /**
  * Returns the directory the knowledge manager stores downloaded NPM packages under, unless the
  * caller names one of its own.

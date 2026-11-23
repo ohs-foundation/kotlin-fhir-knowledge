@@ -293,10 +293,13 @@ internal constructor(
     }
   }
 
-  /** Closes the database and the NPM package downloader. */
+  /**
+   * Closes the NPM package downloader and, where [canCloseDatabase] allows it, the database. On the
+   * web targets the database stays open.
+   */
   override fun close() {
     (npmPackageDownloader as? AutoCloseable)?.close()
-    knowledgeDatabase.close()
+    if (canCloseDatabase()) knowledgeDatabase.close()
   }
 
   /**

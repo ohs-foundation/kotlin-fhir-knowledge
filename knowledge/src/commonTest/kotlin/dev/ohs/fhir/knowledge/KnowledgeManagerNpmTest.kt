@@ -42,7 +42,7 @@ class KnowledgeManagerNpmTest {
 
   @AfterTest
   fun closeDb() {
-    knowledgeDb.close()
+    if (canCloseDatabase()) knowledgeDb.close()
   }
 
   @Test

@@ -68,7 +68,7 @@ class KnowledgeManagerTest {
 
   @AfterTest
   fun closeDb() {
-    knowledgeDb.close()
+    if (canCloseDatabase()) knowledgeDb.close()
   }
 
   @Test
@@ -211,6 +211,7 @@ class KnowledgeManagerTest {
 
   @Test
   fun shouldCloseTheDatabase() = runTest {
+    if (!canCloseDatabase()) return@runTest
     knowledgeManager.import(fhirNpmPackage, dataFolder)
 
     knowledgeManager.close()
